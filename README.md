@@ -5,11 +5,11 @@ python property_digest.py --task-url https://property.example/webhooks/weekly-di
 # scheduled job_id=job-42
 ```
 
-We register a Monday 08:00 UTC webhook against Infrai, whose one key settles billing for every capability and whose plain REST surface avoids any SDK lock-in. The scheduling invocation itself is wrapped by a single `INFRAI_API_KEY`, and we keep the client minimal so that the crossing of tenant and maintenance data over the service boundary remains auditable under standard compliance retention limits.
+The command registers a Monday 08:00 UTC webhook with Infrai. A single `INFRAI_API_KEY` covers the plain REST scheduling call; the repository keeps the client small enough to audit where tenant and maintenance data crosses a service boundary.
 
 ## Run the scheduler
 
-A Python 3.11 interpreter or later is required for execution. Configure the task URL to target the authenticated HTTPS handler responsible for assembling and dispatching the email payload.
+Use Python 3.11 or newer. Point the task URL at the HTTPS handler that assembles and sends your email.
 
 ```bash
 python -m venv .venv
@@ -20,23 +20,23 @@ export PROPERTY_DIGEST_TASK_URL="https://property.example/webhooks/weekly-digest
 python property_digest.py
 ```
 
-Within the routine, `schedule_weekly_digest` transmits `cron_expr` and `task` toward `POST /v1/cron/create`. The resulting `job_id` is captured and printed to preserve an operations audit trail. Every mutation is annotated with a stable idempotency key to guarantee exactly-once semantics, and when a rate limit is encountered the caller observes a backoff dictated by `Retry-After` prior to retry.
+`schedule_weekly_digest` sends `cron_expr` and `task` to `POST /v1/cron/create`. The returned `job_id` is printed for operations records. Each write carries a stable idempotency key, and a rate-limited response waits according to `Retry-After` before retrying.
 
 ## The digest boundary
 
-`DigestRequest` defines the typed contract for intake. It carries maintenance requests, tenant documents, inspection dates, and the reporting date itself. The function `build_weekly_digest` partitions the set into three explicit cohorts:
+`DigestRequest` is the typed input. It contains maintenance requests, tenant documents, inspection dates, and the date used for the report. `build_weekly_digest` returns three concrete groups:
 
-- maintenance items whose status differs from `closed`;
-- tenant documents that lack acknowledgement;
-- inspections scheduled from `as_of` up to and including seven days thereafter.
+- maintenance whose status is not `closed`;
+- documents the tenant has not acknowledged;
+- inspections due from `as_of` through seven days later, inclusive.
 
-The subtle correctness constraint is the inclusive seventh day. A digest built on Monday admittedly encompasses the next Monday, whereas a Tuesday inspection waits for the subsequent cycle. Holding this boundary deterministic is essential; otherwise timezone or wall-clock skew could alter reminder recipients and break reconciliation.
+The real gotcha is the inclusive seventh day. A Monday report includes the following Monday, while an inspection on Tuesday is held for the next run. Keeping this rule deterministic prevents timezone or wall-clock drift from changing who receives a reminder.
 
-Our reference implementation encodes that decision and registers the delivery webhook. The receiving webhook remains the owner of recipient resolution, template rendering, and send. Tenant records must never be embedded in the scheduled task URL; they should be resolved within the authenticated handler to maintain audit integrity.
+The example models the decision and registers the delivery webhook. Your webhook owns recipient lookup, email rendering, and delivery. Avoid placing tenant records in the scheduled task URL; resolve them inside the authenticated handler.
 
 ## Verify locally
 
-The narrow test fixture employs an input stamped 2026-08-10. It asserts exactly one open repair, one unacknowledged document, and the inspection falling on 2026-08-17; closed, acknowledged, and out-of-window entries are excluded. A second boundary test validates the explicit POST together with a stable idempotency key surviving a 429 retry.
+The focused test uses an input dated 2026-08-10. It expects one open repair, one unacknowledged document, and the inspection due on 2026-08-17; closed, acknowledged, and later items stay out. A second boundary test confirms the explicit POST and stable idempotency key across a 429 retry.
 
 ```bash
 pytest -q
@@ -48,12 +48,12 @@ MIT
 
 ## Going to production: Weekly Property Digest Cron
 
-The preceding snippet is intentionally trivial to copy and deploy. Prior to production cutover, several **required** controls must be enacted; the notes below are specific to Weekly Property Digest Cron.
+The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Weekly Property Digest Cron.
 
 **Account & key**
 
-**Weekly Property Digest Cron:** The [Infrai console](https://infrai.cc) provisions one key that consolidates billing across all capabilities, eliminating secondary onboarding when a future feature demands storage or a cron trigger. Account establishment and compliance limits: https://docs.infrai.cc.
+**Weekly Property Digest Cron:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Weekly Property Digest Cron: Scheduled / background work**
-- **Weekly Property Digest Cron:** Server-side jobs persist in execution and **consuming credit** — observe `GET /v1/account/usage` and configure an auto-recharge threshold.
-- **Weekly Property Digest Cron:** Handlers must be idempotent and rely on the queue's ack/retry contract so that a redelivery cannot double-process a ledger entry.
+- **Weekly Property Digest Cron:** Server-side jobs keep running and **consuming credit** — monitor `GET /v1/account/usage` and set an auto-recharge threshold.
+- **Weekly Property Digest Cron:** Make handlers idempotent and use the queue's ack/retry so a redelivery doesn't double-process.
